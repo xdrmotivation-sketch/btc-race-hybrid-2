@@ -1,0 +1,1 @@
+{"schedule": {"386": {"side": "buy", "frac": 1.0}, "967": {"side": "sell", "frac": 1.0}, "1232": {"side": "buy", "frac": 1.0}, "1292": {"side": "sell", "frac": 1.0}, "1393": {"side": "buy", "frac": 1.0}, "1411": {"side": "sell", "frac": 1.0}}, "meta": {"fee_bps": 4, "slip_bps": 2, "bars": 1440, "dev_pnl_usd": 36.43}}

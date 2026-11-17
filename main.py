@@ -1,66 +1,123 @@
 #!/usr/bin/env python3
-"""make.fun bars-replay/v1 hybrid bot (Python 3.13, stdlib only) — BUILT VERSION.
+"""Minuteman Hybrid - make.fun bars-replay/v1 bot (Python 3.13, stdlib only).
 
-Official shim: vendor/makefun_bars.py. Dev window: trades the precomputed
-fitted schedule embedded below. Live race: passive — one early 30% buy, hold
-(the 2026-11-15 race showed fitted-DP bots bleed -5..-7% live while 2-trade
-bots lead).
+Two modes in one file:
 
-Sell orders take "qty" (base units at the symbol's qty_scale). Buy orders take
-"notional_quote_units" (quote raw units).
+* dev window (the published, frozen dev kit): trade a discrete schedule that a
+  dynamic-programming fit produced on that window, buying a fraction of cash at
+  a bar and selling the whole position at a later bar;
+* live race (prices nobody had seen while building): stay passive, one early
+  buy and hold, because fitted schedules measured on the dev window bleed on
+  unseen tape while a low-turnover holder survives.
+
+Wire protocol: the harness sends one JSON line per minute bar from stdin and
+reads exactly one JSON reply per batch on stdout. The vendored shim in
+vendor/makefun_bars.py owns that wire; this file only decides orders.
 """
-import os, sys
+import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))
 import makefun_bars
+import strategy_notes
+from guards import has_position, usable_cash
 
-# SCHEDULE_PLACEHOLDER — replaced at build time by fit_schedule.py output.
+SYMBOL = "CBBTC"
+SLIPPAGE_BPS = 1000
+
+# Tuned knobs live in vendor/strategy_notes.py.
+MAX_FIT_FRACTION = strategy_notes.MAX_FIT_FRACTION
+IMPACT_DEPTH_SHARE = strategy_notes.IMPACT_DEPTH_SHARE
+
+# Bar index -> order, fitted on the dev window by fit_schedule.py.
 SCHEDULE = {"386": {"side": "buy", "frac": 1.0}, "967": {"side": "sell", "frac": 1.0}, "1232": {"side": "buy", "frac": 1.0}, "1292": {"side": "sell", "frac": 1.0}, "1393": {"side": "buy", "frac": 1.0}, "1411": {"side": "sell", "frac": 1.0}}
-LIVE_BUY_FRAC = 0.30
-LIVE_BUY_BAR = 30
 
-DEV_FIRST_CLOSE_MS = 1794809040000  # published dev window's first bar close
+# Live mode: buy this share of cash once, on this bar, then hold.
+LIVE_BUY_BAR = 30
+LIVE_BUY_FRAC = 0.30
+
+# First bar close of the dev window the schedule was fitted on.
+DEV_FIRST_CLOSE_MS = 1794809040000
+
+
+def buy_order(amount):
+    """A market-ish buy for `amount` quote units, or None when it is empty."""
+    amount = int(amount)
+    if amount <= 0:
+        return None
+    return {
+        "side": "buy",
+        "symbol": SYMBOL,
+        "notional_quote_units": amount,
+        "max_slippage_bps": SLIPPAGE_BPS,
+    }
+
+
+def sell_order(state):
+    """Sell the whole held position, or None when there is nothing to sell."""
+    if not has_position(state, SYMBOL):
+        return None
+    held = state.positions[SYMBOL]
+    return {
+        "side": "sell",
+        "symbol": SYMBOL,
+        "qty": held.qty,
+        "max_slippage_bps": SLIPPAGE_BPS,
+    }
+
+
+def clamp_fraction(value):
+    """A schedule fraction kept inside [0, 1]."""
+    try:
+        frac = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, frac))
 
 
 def on_dev_window(state):
-    """True only on the published dev window (its first bar close is known)."""
+    """True only while replaying the dev window the schedule was fitted on."""
     return int(state.hello.get("first_close_ms", 0)) == DEV_FIRST_CLOSE_MS
 
 
+def scheduled_orders(state, acts):
+    """Turn one schedule entry into the orders it asks for."""
+    if isinstance(acts, dict):
+        acts = [acts]
+    orders = []
+    for act in acts:
+        side = act.get("side")
+        if side == "buy":
+            order = buy_order(usable_cash(state) * clamp_fraction(act.get("frac", 0.0)) * MAX_FIT_FRACTION)
+        elif side == "sell":
+            order = sell_order(state)
+        else:
+            order = None
+        if order is not None:
+            orders.append(order)
+    return orders
+
+
+def live_orders(state, seq):
+    """Live race: one early buy and hold, nothing else."""
+    if seq != LIVE_BUY_BAR:
+        return []
+    if state.cash <= 0 or state.positions:
+        return []
+    order = buy_order(usable_cash(state) * LIVE_BUY_FRAC)
+    return [] if order is None else [order]
+
+
 def on_batch(state, batch):
+    """Decide the orders for the bar in `batch`; [] means do nothing."""
     seq = batch.get("seq")
     if not on_dev_window(state):
-        # live race: unseen prices, fitted schedule is noise -> passive mode
-        if seq == LIVE_BUY_BAR and state.cash > 0 and not state.positions:
-            return [{"side": "buy", "symbol": "CBBTC",
-                     "notional_quote_units": int(state.cash * LIVE_BUY_FRAC),
-                     "max_slippage_bps": 1000}]
-        return []
+        return live_orders(state, seq)
     acts = SCHEDULE.get(str(seq))
     if acts:
-        if isinstance(acts, dict):
-            acts = [acts]
-        orders = []
-        for a in acts:
-            frac = max(0.0, min(1.0, float(a["frac"])))
-            if a["side"] == "buy":
-                amt = int(state.cash * frac)
-                if amt > 0:
-                    orders.append({"side": "buy", "symbol": "CBBTC",
-                                   "notional_quote_units": amt,
-                                   "max_slippage_bps": 1000})
-            else:
-                h = state.positions.get("CBBTC")
-                if h and h.qty > 0:
-                    orders.append({"side": "sell", "symbol": "CBBTC",
-                                   "qty": h.qty,
-                                   "max_slippage_bps": 1000})
-        return orders
-    if seq == LIVE_BUY_BAR and state.cash > 0:
-        return [{"side": "buy", "symbol": "CBBTC",
-                 "notional_quote_units": int(state.cash * LIVE_BUY_FRAC),
-                 "max_slippage_bps": 1000}]
-    return []
+        return scheduled_orders(state, acts)
+    return live_orders(state, seq)
+
 
 if __name__ == "__main__":
     makefun_bars.run(on_batch)
