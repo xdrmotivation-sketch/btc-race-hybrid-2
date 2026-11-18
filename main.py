@@ -30,14 +30,14 @@ MAX_FIT_FRACTION = strategy_notes.MAX_FIT_FRACTION
 IMPACT_DEPTH_SHARE = strategy_notes.IMPACT_DEPTH_SHARE
 
 # Bar index -> order, fitted on the dev window by fit_schedule.py.
-SCHEDULE = {"386": {"side": "buy", "frac": 1.0}, "967": {"side": "sell", "frac": 1.0}, "1232": {"side": "buy", "frac": 1.0}, "1292": {"side": "sell", "frac": 1.0}, "1393": {"side": "buy", "frac": 1.0}, "1411": {"side": "sell", "frac": 1.0}}
+SCHEDULE = {"70":{"side":"buy","frac":1.0},"508":{"side":"sell","frac":1.0},"678":{"side":"buy","frac":1.0},"1033":{"side":"sell","frac":1.0},"1049":{"side":"buy","frac":1.0},"1085":{"side":"sell","frac":1.0},"1277":{"side":"buy","frac":1.0},"1299":{"side":"sell","frac":1.0},"1436":{"side":"buy","frac":1.0}}
 
 # Live mode: buy this share of cash once, on this bar, then hold.
 LIVE_BUY_BAR = 30
 LIVE_BUY_FRAC = 0.30
 
 # First bar close of the dev window the schedule was fitted on.
-DEV_FIRST_CLOSE_MS = 1794809040000
+DEV_FIRST_CLOSE_MS = 1794926700000
 
 
 def buy_order(amount):
